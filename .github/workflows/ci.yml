@@ -13,6 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y python3-dbus python3-gi dbus-daemon
-      - run: python -m py_compile service/knvtop_service.py backend/knvtop_poll.py
+      - run: python -m py_compile service/nvstats_service.py backend/nvstats_poll.py
       - run: bash -n install.sh
       - run: dbus-run-session -- python3 scripts/smoke_dbus.py

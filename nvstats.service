@@ -1,5 +1,5 @@
 [Unit]
-Description=knvtop shared GPU telemetry D-Bus service
+Description=nvstats shared GPU telemetry D-Bus service
 After=graphical-session-pre.target
 Wants=graphical-session-pre.target
 
@@ -7,11 +7,11 @@ Wants=graphical-session-pre.target
 # Runs via a dedicated python3 interpreter copy carrying cap_sys_ptrace
 # (see README.md "Cross-user GPU stats" section) so gpu_proc_sample()/
 # llm_sample() can read /proc/<pid>/fdinfo for processes owned by a
-# different user than this service (e.g. an isolated `aistack` account
+# different user than this service (e.g. a separate inference-service account
 # running llama.cpp) -- that file is otherwise kernel-restricted to
 # same-uid-or-root. Falls back to plain python3 (no cross-user GPU%/VRAM,
 # everything else still works) if that dedicated copy isn't set up yet.
-ExecStart=/bin/sh -c 'exec "$([ -x /usr/local/lib/knvtop/python3-ptrace ] && echo /usr/local/lib/knvtop/python3-ptrace || command -v python3)" %h/.local/share/knvtop-service/service/knvtop_service.py'
+ExecStart=/bin/sh -c 'exec "$([ -x /usr/local/lib/nvstats-service/python3-ptrace ] && echo /usr/local/lib/nvstats-service/python3-ptrace || command -v python3)" %h/.local/share/nvstats-service/service/nvstats_service.py'
 Restart=on-failure
 RestartSec=2
 

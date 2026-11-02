@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""knvtop D-Bus service.
+"""nvstats shared telemetry daemon and D-Bus API.
 
 Runs the poller in a background thread and exposes the latest sample
-on the session bus at com.daevid.knvtop / /com/daevid/knvtop.
+on the session bus at com.daevid.nvstats / /com/daevid/nvstats.
 
 Interfaces:
-  com.daevid.knvtop.Sample
+  com.daevid.nvstats.Sample
     Get() -> (a{sv})  # {gpu: a{sv}, sys: a{sv}, llm: a{sv}}
-  com.daevid.knvtop.Status
+  com.daevid.nvstats.Status
     IsAlive() -> (b)
     Restart() -> (b)
-  com.daevid.knvtop.Process
+  com.daevid.nvstats.Process
     Kill(pid:int) -> (b, s)  # SIGTERM then SIGKILL if needed
 """
 
@@ -30,7 +30,7 @@ import dbus
 import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
-from knvtop_poll import (
+from nvstats_poll import (
     gpu_proc_sample,
     gpu_sample,
     llm_sample,
@@ -39,13 +39,13 @@ from knvtop_poll import (
     sys_sample,
 )
 
-BUS_NAME = "com.daevid.knvtop"
-OBJECT_PATH = "/com/daevid/knvtop"
-KILL_PATH_PREFIX = "/com/daevid/knvtop/kill"
-RESTART_PATH_PREFIX = "/com/daevid/knvtop/restart"
+BUS_NAME = "com.daevid.nvstats"
+OBJECT_PATH = "/com/daevid/nvstats"
+KILL_PATH_PREFIX = "/com/daevid/nvstats/kill"
+RESTART_PATH_PREFIX = "/com/daevid/nvstats/restart"
 
 
-class KnvtopService:
+class NvstatsService:
     def __init__(self):
         self._latest = {
             "gpu": {},
@@ -90,7 +90,7 @@ class KnvtopService:
             import logging
 
             logging.warning(
-                "knvtop: sudo -n true rc=%d can_kill_all=%s stderr=%s",
+                "nvstats: sudo -n true rc=%d can_kill_all=%s stderr=%s",
                 r.returncode,
                 can_kill_all,
                 r.stderr,
@@ -99,7 +99,7 @@ class KnvtopService:
             can_kill_all = False
             import logging
 
-            logging.warning("knvtop: sudo check failed: %s", e)
+            logging.warning("nvstats: sudo check failed: %s", e)
         while not self._stop.is_set():
             try:
                 llm = llm_sample()
@@ -126,7 +126,7 @@ class KnvtopService:
             }
 
 
-service = KnvtopService()
+service = NvstatsService()
 
 
 def _to_dbus_value(v):
@@ -164,7 +164,7 @@ def _llm_to_dbus(llm):
     )
 
 
-class KnvtopDBusObject(dbus.service.Object):
+class NvstatsDBusObject(dbus.service.Object):
     def __init__(self, bus_name, obj_path):
         bus = dbus.SessionBus()
         super().__init__(bus, obj_path)
@@ -303,25 +303,31 @@ class KnvtopDBusObject(dbus.service.Object):
     def restart_async(self, pid_str, reply_cb):
         self._async(self._do_restart, pid_str, reply_cb)
 
-    @dbus.service.method("com.daevid.knvtop.Sample", in_signature="", out_signature="s")
+    @dbus.service.method(
+        "com.daevid.nvstats.Sample", in_signature="", out_signature="s"
+    )
     def Get(self):
         import json
 
         s = service.get_sample()
         return dbus.String(json.dumps(s))
 
-    @dbus.service.method("com.daevid.knvtop.Status", in_signature="", out_signature="b")
+    @dbus.service.method(
+        "com.daevid.nvstats.Status", in_signature="", out_signature="b"
+    )
     def IsAlive(self):
         return True
 
-    @dbus.service.method("com.daevid.knvtop.Status", in_signature="", out_signature="b")
+    @dbus.service.method(
+        "com.daevid.nvstats.Status", in_signature="", out_signature="b"
+    )
     def Restart(self):
         service.stop()
         service.start()
         return True
 
     @dbus.service.method(
-        "com.daevid.knvtop.Process",
+        "com.daevid.nvstats.Process",
         in_signature="s",
         out_signature="bs",
         async_callbacks=("reply_cb", "error_cb"),
@@ -330,13 +336,13 @@ class KnvtopDBusObject(dbus.service.Object):
         self.kill_async(pid_str, reply_cb)
 
 
-class KnvtopKillObject(dbus.service.FallbackObject):
+class NvstatsKillObject(dbus.service.FallbackObject):
     """Argument-free kill endpoint for the QML widget.
 
     Plasma's QML dbusMessage does not deliver method arguments (verified
     against plasma-workspace here: typed or plain, with or without a
     signature, the callee sees zero args). So the PID travels in the object
-    path instead: Kill() on /com/daevid/knvtop/kill/<pid>. A FallbackObject
+        path instead: Kill() on /com/daevid/nvstats/kill/<pid>. A FallbackObject
     serves every path under its prefix and tells the method which one.
     """
 
@@ -345,7 +351,7 @@ class KnvtopKillObject(dbus.service.FallbackObject):
         self._target = target
 
     @dbus.service.method(
-        "com.daevid.knvtop.Process",
+        "com.daevid.nvstats.Process",
         in_signature="",
         out_signature="bs",
         async_callbacks=("reply_cb", "error_cb"),
@@ -357,16 +363,16 @@ class KnvtopKillObject(dbus.service.FallbackObject):
         self._target.kill_async(path.rsplit("/", 1)[-1], reply_cb)
 
 
-class KnvtopRestartObject(dbus.service.FallbackObject):
-    """Restart() on /com/daevid/knvtop/restart/<pid> -- same path-encoded-PID
-    scheme as KnvtopKillObject, for the same no-arguments reason."""
+class NvstatsRestartObject(dbus.service.FallbackObject):
+    """Restart() on /com/daevid/nvstats/restart/<pid> -- same path-encoded-PID
+    scheme as NvstatsKillObject, for the same no-arguments reason."""
 
     def __init__(self, bus, prefix, target):
         super().__init__(bus, prefix)
         self._target = target
 
     @dbus.service.method(
-        "com.daevid.knvtop.Process",
+        "com.daevid.nvstats.Process",
         in_signature="",
         out_signature="bs",
         async_callbacks=("reply_cb", "error_cb"),
@@ -382,10 +388,10 @@ def main():
     loop = GLib.MainLoop()
     bus = dbus.SessionBus()
     bus_name = dbus.service.BusName(BUS_NAME, bus=bus)
-    obj = KnvtopDBusObject(bus_name, OBJECT_PATH)
+    obj = NvstatsDBusObject(bus_name, OBJECT_PATH)
     # Held in locals so dbus-python keeps the fallback objects registered.
-    kill_obj = KnvtopKillObject(bus, KILL_PATH_PREFIX, obj)  # noqa: F841
-    restart_obj = KnvtopRestartObject(bus, RESTART_PATH_PREFIX, obj)  # noqa: F841
+    kill_obj = NvstatsKillObject(bus, KILL_PATH_PREFIX, obj)  # noqa: F841
+    restart_obj = NvstatsRestartObject(bus, RESTART_PATH_PREFIX, obj)  # noqa: F841
 
     def on_signal(signum, frame):
         service.stop()

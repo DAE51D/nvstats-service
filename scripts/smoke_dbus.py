@@ -7,14 +7,14 @@ import subprocess
 import sys
 import time
 
-SERVICE = [sys.executable, "service/knvtop_service.py"]
+SERVICE = [sys.executable, "service/nvstats_service.py"]
 CALL = [
     "busctl",
     "--user",
     "call",
-    "com.daevid.knvtop",
-    "/com/daevid/knvtop",
-    "com.daevid.knvtop.Sample",
+    "com.daevid.nvstats",
+    "/com/daevid/nvstats",
+    "com.daevid.nvstats.Sample",
     "Get",
 ]
 

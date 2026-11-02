@@ -1,14 +1,14 @@
-# knvtop-service
+# nvstats-service
 
-The standalone, per-user D-Bus telemetry daemon shared by the knvtop Plasma widget and the onvtop OpenChamber extension. It polls GPU/system/process data once and publishes the latest sample on the current user's session bus. Neither client contains its own sampler.
+The standalone, per-user D-Bus telemetry daemon shared by GPU monitoring clients. It polls GPU/system/process data once and publishes the latest sample on the current user's session bus. The Plasma knvtop widget and OpenChamber onvtop extension are independent clients; neither contains its own sampler.
 
-The D-Bus API remains compatible with existing clients:
+The D-Bus API uses the neutral `com.daevid.nvstats` bus name, `/com/daevid/nvstats` object path, and `com.daevid.nvstats.*` interfaces:
 
-- `com.daevid.knvtop.Sample.Get()` on `/com/daevid/knvtop` returns the latest `{gpu, sys, llm, gpu_procs, current_user, can_kill_all}` sample.
-- `com.daevid.knvtop.Status.IsAlive()` and `Restart()` manage the poller.
-- `com.daevid.knvtop.Process.Kill()` and `Restart()` retain the existing process controls.
+- `com.daevid.nvstats.Sample.Get()` returns the latest `{gpu, sys, llm, gpu_procs, current_user, can_kill_all}` sample.
+- `com.daevid.nvstats.Status.IsAlive()` and `Restart()` manage the poller.
+- `com.daevid.nvstats.Process.Kill()` and `Restart()` provide process controls.
 
-The bus name and object paths are intentionally stable so the clients can migrate independently.
+The clients in this release use this API directly; there is no legacy bus-name alias.
 
 ## Install
 
@@ -16,18 +16,18 @@ This is a user-session service; do not run the installer with `sudo`. It require
 
 ```sh
 sudo apt install python3-dbus python3-gi
-git clone https://github.com/DAE51D/knvtop-service.git
-cd knvtop-service
+git clone https://github.com/DAE51D/nvstats-service.git
+cd nvstats-service
 ./install.sh
 ```
 
-The installer copies the daemon to `~/.local/share/knvtop-service`, installs and enables the `knvtop.service` user unit, and restarts the unit if it was already active. GPU tools are optional: `amd-smi`/`nvidia-smi` are used when available, with the existing sysfs fallbacks retained.
+The installer copies the daemon to `~/.local/share/nvstats-service`, installs and enables the `nvstats.service` user unit, and starts it. GPU tools are optional: `amd-smi`/`nvidia-smi` are used when available, with sysfs fallbacks retained.
 
 Verify it is running:
 
 ```sh
-systemctl --user status knvtop.service
-busctl --user call com.daevid.knvtop /com/daevid/knvtop com.daevid.knvtop.Sample Get
+systemctl --user status nvstats.service
+busctl --user call com.daevid.nvstats /com/daevid/nvstats com.daevid.nvstats.Sample Get
 ```
 
 Once installed, both knvtop and onvtop can consume the daemon independently; neither the widget nor OpenChamber extension needs to be installed to keep telemetry polling alive.
@@ -39,7 +39,7 @@ The daemon can read per-process GPU engine/memory details only for processes own
 ## Development checks
 
 ```sh
-python3 -m py_compile service/knvtop_service.py backend/knvtop_poll.py
+python3 -m py_compile service/nvstats_service.py backend/nvstats_poll.py
 bash -n install.sh
 dbus-run-session -- python3 scripts/smoke_dbus.py
 ```

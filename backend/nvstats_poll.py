@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""knvtop telemetry poller.
+"""Shared GPU, system and LLM telemetry poller for nvstats-service.
 
 Emits one JSON object per line on stdout, once per second:
 
@@ -474,7 +474,7 @@ def _username(pid):
 
 # Units whose restart would take the desktop session or this monitor down.
 _UNIT_DENY = re.compile(
-    r"^(sddm|gdm|lightdm|display-manager|systemd-logind|dbus|knvtop)\b"
+    r"^(sddm|gdm|lightdm|display-manager|systemd-logind|dbus|nvstats)\b"
     r"|kwin|^user@|^user-runtime-dir@|^session-"
 )
 _UNIT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_.@\-]*\.service$")
