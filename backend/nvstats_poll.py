@@ -266,14 +266,72 @@ def _find(name, argv):
     return None
 
 
-def _is_llm(argv):
+def _classify_llm(argv):
+    """Recognize common Linux model-serving launchers from their argv only.
+
+    Keep this intentionally shallow: do not inspect containers, config files,
+    or desktop-app APIs. The detected launcher must provide a model argument
+    before it is shown as a model process.
+    """
     if not argv:
-        return False
+        return None
     exe = os.path.basename(argv[0])
-    return (
-        exe in ("llama-server", "llama-cli", "llama-bench", "ollama", "vllm")
-        or "vllm" in argv[0]
-    )
+    if exe in ("llama-server", "llama-cli", "llama-bench"):
+        return "llama"
+    if exe == "ollama":
+        return "ollama"
+
+    # Console scripts may appear as argv[0], or as argv[1] when Python is the
+    # interpreter. Do not scan arbitrary arguments: an unrelated client may
+    # contain an engine name in an option value.
+    launchers = [exe]
+    if (
+        (exe == "python" or exe.startswith("python3"))
+        and len(argv) > 1
+        and not argv[1].startswith("-")
+    ):
+        launchers.append(os.path.basename(argv[1]))
+    if any(name == "vllm" or name.startswith("vllm-") for name in launchers):
+        return "vllm"
+    if any(name == "sglang" or name.startswith("sglang-") for name in launchers):
+        return "sglang"
+    if "text-generation-launcher" in launchers:
+        return "tgi"
+
+    module = _find("-m", argv)
+    if module and (module == "vllm" or module.startswith("vllm.")):
+        return "vllm"
+    if module and module in ("sglang.launch_server", "sglang.srt.server"):
+        return "sglang"
+    return None
+
+
+def _first_positional_after(argv, command):
+    try:
+        index = argv.index(command) + 1
+    except ValueError:
+        return None
+    if index < len(argv) and not argv[index].startswith("-"):
+        return argv[index]
+    return None
+
+
+def _llm_model(engine, argv):
+    if engine == "llama":
+        return _find("--model", argv) or _find("-m", argv)
+    if engine == "ollama":
+        return None
+    if engine == "vllm":
+        return (
+            _find("--model", argv)
+            or _find("--model-path", argv)
+            or _first_positional_after(argv, "serve")
+        )
+    if engine == "sglang":
+        return _find("--model-path", argv) or _find("--model", argv)
+    if engine == "tgi":
+        return _find("--model-id", argv) or _find("--model", argv)
+    return None
 
 
 def _is_ollama_owned(argv):
@@ -286,22 +344,23 @@ def _is_ollama_owned(argv):
 
 
 def llm_sample():
-    llama, ollama, vllm = [], [], []
+    llama, ollama, vllm, sglang, tgi = [], [], [], [], []
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
         pids = []
     for pid in pids:
         argv = _proc_cmdline(pid)
-        if argv is None or not _is_llm(argv):
+        engine = _classify_llm(argv)
+        if engine is None:
             continue
-        exe = os.path.basename(argv[0])
-        if exe.startswith("llama") and _is_ollama_owned(argv):
+        if engine == "llama" and _is_ollama_owned(argv):
             continue
         st = _proc_status(pid, {"Name", "VmRSS", "Threads"})
         clean_argv = [a for a in argv if a]
         entry = {
             "pid": int(pid),
+            "engine": engine,
             "name": st.get("Name", os.path.basename(argv[0])),
             "cmdline": " ".join(clean_argv),
             # Full argv (not just the flattened cmdline string) so the UI can
@@ -324,26 +383,37 @@ def llm_sample():
         entry["type"] = gpu_stats["types"] if gpu_stats else []
         entry["user"] = _username(pid) or "?"
         entry["unit"] = owning_unit(pid)
-        if exe.startswith("llama"):
-            # llama-server/llama-cli use --model; llama-bench uses -m
-            entry["model"] = _find("--model", argv) or _find("-m", argv)
+        if engine == "llama":
+            entry["model"] = _llm_model(engine, argv)
             entry["ngl"] = _find("--n-gpu-layers", argv)
             entry["ctx"] = _find("--ctx-size", argv)
             entry["parallel"] = _find("--parallel", argv)
             entry["alias"] = _find("--alias", argv)
             entry["port"] = _find("--port", argv)
             llama.append(entry)
-        elif exe == "ollama":
+        elif engine == "ollama":
             entry["subcmd"] = argv[1] if len(argv) > 1 else None
             entry["port"] = _find("--port", argv)
             ollama.append(entry)
-        elif "vllm" in exe or "vllm" in argv[0]:
-            entry["model"] = _find("--model", argv) or (
-                argv[1] if len(argv) > 1 and not argv[1].startswith("-") else None
-            )
+        elif engine == "vllm":
+            entry["model"] = _llm_model(engine, argv)
             entry["port"] = _find("--port", argv)
             vllm.append(entry)
-    return {"llama": llama, "ollama": ollama, "vllm": vllm}
+        elif engine == "sglang":
+            entry["model"] = _llm_model(engine, argv)
+            entry["port"] = _find("--port", argv)
+            sglang.append(entry)
+        elif engine == "tgi":
+            entry["model"] = _llm_model(engine, argv)
+            entry["port"] = _find("--port", argv)
+            tgi.append(entry)
+    return {
+        "llama": llama,
+        "ollama": ollama,
+        "vllm": vllm,
+        "sglang": sglang,
+        "tgi": tgi,
+    }
 
 
 def ollama_ps():

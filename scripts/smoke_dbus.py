@@ -36,6 +36,12 @@ def main():
                         sample.get("sys"), dict
                     ):
                         raise RuntimeError("D-Bus returned an invalid sample shape")
+                    llm = sample.get("llm", {})
+                    if not all(
+                        isinstance(llm.get(engine), list)
+                        for engine in ("llama", "ollama", "vllm", "sglang", "tgi")
+                    ):
+                        raise RuntimeError("D-Bus returned an invalid LLM sample shape")
                     if not sample["sys"].get("ram_total"):
                         last_error = "waiting for the first telemetry poll"
                         time.sleep(0.25)

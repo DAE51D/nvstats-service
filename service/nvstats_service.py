@@ -50,7 +50,14 @@ class NvstatsService:
         self._latest = {
             "gpu": {},
             "sys": {},
-            "llm": {"llama": [], "ollama": [], "vllm": [], "ollama_models": []},
+            "llm": {
+                "llama": [],
+                "ollama": [],
+                "vllm": [],
+                "sglang": [],
+                "tgi": [],
+                "ollama_models": [],
+            },
             "gpu_procs": [],
         }
         self._lock = threading.Lock()
@@ -158,6 +165,8 @@ def _llm_to_dbus(llm):
             "llama": _proc_list_to_dbus(llm.get("llama", [])),
             "ollama": _proc_list_to_dbus(llm.get("ollama", [])),
             "vllm": _proc_list_to_dbus(llm.get("vllm", [])),
+            "sglang": _proc_list_to_dbus(llm.get("sglang", [])),
+            "tgi": _proc_list_to_dbus(llm.get("tgi", [])),
             "ollama_models": _proc_list_to_dbus(llm.get("ollama_models", [])),
         },
         signature="sv",

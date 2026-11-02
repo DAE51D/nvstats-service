@@ -2,9 +2,11 @@
 
 The standalone, per-user D-Bus telemetry daemon shared by GPU monitoring clients. It polls GPU/system/process data once and publishes the latest sample on the current user's session bus. The Plasma knvtop widget and OpenChamber onvtop extension are independent clients; neither contains its own sampler.
 
+For an AI-assisted setup, point your coding agent at the [install skill](SKILL.md). Review package-manager prompts and optional privilege changes before approving them.
+
 The D-Bus API uses the neutral `com.daevid.nvstats` bus name, `/com/daevid/nvstats` object path, and `com.daevid.nvstats.*` interfaces:
 
-- `com.daevid.nvstats.Sample.Get()` returns the latest `{gpu, sys, llm, gpu_procs, current_user, can_kill_all}` sample.
+- `com.daevid.nvstats.Sample.Get()` returns the latest `{gpu, sys, llm, gpu_procs, current_user, can_kill_all}` sample. The LLM sample recognizes llama.cpp, Ollama, vLLM, SGLang, and Hugging Face TGI launchers; it reads process arguments and `/proc` stats without probing containers or desktop-app APIs.
 - `com.daevid.nvstats.Status.IsAlive()` and `Restart()` manage the poller.
 - `com.daevid.nvstats.Process.Kill()` and `Restart()` provide process controls.
 
@@ -40,6 +42,7 @@ The daemon can read per-process GPU engine/memory details only for processes own
 
 ```sh
 python3 -m py_compile service/nvstats_service.py backend/nvstats_poll.py
+python3 -m unittest discover -s tests
 bash -n install.sh
 dbus-run-session -- python3 scripts/smoke_dbus.py
 ```

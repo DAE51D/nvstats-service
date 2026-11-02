@@ -1,0 +1,1 @@
+The standard-library unit tests exercise the small `/proc/cmdline` classifier only. They intentionally do not launch inference servers, inspect containers, query desktop-app APIs, or print real process command lines.
