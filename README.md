@@ -85,3 +85,14 @@ dbus-run-session -- python3 scripts/smoke_dbus.py
 ```
 
 The D-Bus service has full access as the installing user and includes process-control methods; install it only if you trust this code. The HTTP API is read-only and off by default in user mode; it binds to loopback unless you choose otherwise. Before exposing it to a network, set `NVSTATS_TOKEN`: samples include process names and command lines (secret-looking option values are masked, but that is a best-effort filter, not a guarantee).
+
+## Other nvtop
+
+I've leveraged this backend to display the same `nvtop` data in these projects:
+
+- [Vobot nvtop](https://github.com/DAE51D/vobot-apps/tree/main/nvtop)
+- [KDE knvtop](https://github.com/DAE51D/knvtop)
+- [Openchamber onvtop](https://github.com/DAE51D/openchamber-onvtop)
+
+So if you have this one service running those others will connect to it.
+I encourage you to write other "clients" to this backend as well.
