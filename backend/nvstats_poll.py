@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """Shared GPU, system and LLM telemetry poller for nvstats-service.
 
-Emits one JSON object per line on stdout, once per second:
+Emits one JSON object per line on stdout, once per second (standalone use;
+the services import these functions instead):
 
     {
-      "gpu": {"util": int|None, "mem_used": int|None, "mem_total": int|None,
-              "temp": float|None, "power_w": float|None, "power_cap_w": float|None},
+      "gpu": {...},   # see nvstats_gpu.GPU_KEYS; unknown values are null
       "sys": {"ram_used": int, "ram_total": int, "swap_used": int,
-              "swap_total": int, "load1": float, "load5": float, "load15": float},
+              "swap_total": int, "load1": float, "load5": float, "load15": float,
+              "cpu": float|None},
       "llm": {"llama": [ {...}, ... ], "ollama": [ {...}, ... ], "vllm": [ {...} ]},
       "gpu_procs": [ {pid, user, name, cmdline, argv, type: [...], gpu_pct, vram_kb}, ... ]
     }
 
-GPU source: `amd-smi metric --json` (one-shot). On failure, fall back to
-sysfs: /sys/class/drm/card*/device/gpu_busy_percent and the hwmon whose
-name == "amdgpu" (resolved by name, not index, so it survives reboots).
-Missing values are null (QML renders N/A).
+GPU sampling lives in nvstats_gpu.py. Missing values are null (clients
+render N/A).
 """
 
 import json
@@ -26,157 +25,7 @@ import subprocess
 import sys
 import time
 
-HWMON_GLOB = "/sys/class/hwmon/hwmon*"
-DRM_GLOB = "/sys/class/drm/card*/device/gpu_busy_percent"
-
-
-def _read_int(path):
-    try:
-        with open(path) as f:
-            return int(f.read().strip())
-    except (OSError, ValueError):
-        return None
-
-
-def _read_float(path):
-    try:
-        with open(path) as f:
-            return float(f.read().strip())
-    except (OSError, ValueError):
-        return None
-
-
-def _amd_smi():
-    try:
-        out = subprocess.run(
-            ["amd-smi", "metric", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
-        d = json.loads(out)["gpu_data"][0]
-        g = d.get("usage", {}).get("gfx_activity", {})
-        m = d.get("mem_usage", {})
-        t = d.get("temperature", {})
-        p = d.get("power", {})
-
-        def val(dct):
-            v = dct.get("value") if isinstance(dct, dict) else None
-            return v if isinstance(v, (int, float)) else None
-
-        return {
-            "util": val(g),
-            "mem_used": val(m.get("used_gtt")),
-            "mem_total": val(m.get("total_gtt")),
-            "temp": val(t.get("apu_temperature_gfx")) or val(t.get("edge")),
-            "power_w": val(p.get("socket_power"))
-            or val(p.get("apu_average_gfx_power")),
-            "power_cap_w": None,  # amd-smi does not expose the cap; try sysfs
-        }
-    except Exception:
-        return None
-
-
-def _nvidia_smi():
-    # nvidia-smi CSV, noheader/nounits: util %, VRAM MiB, VRAM MiB, temp C,
-    # power W, power limit W. "N/A" for any unavailable field (e.g. power
-    # limit on some cards) -- treat as None, same convention as _amd_smi().
-    try:
-        out = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=utilization.gpu,memory.used,memory.total,"
-                "temperature.gpu,power.draw,power.limit",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
-        fields = [f.strip() for f in out.strip().split(",")]
-        if len(fields) < 6:
-            return None
-
-        def num(s):
-            try:
-                v = float(s)
-            except ValueError:
-                return None
-            return int(v) if v == int(v) else v
-
-        return {
-            "util": num(fields[0]),
-            "mem_used": num(fields[1]),
-            "mem_total": num(fields[2]),
-            "temp": num(fields[3]),
-            "power_w": num(fields[4]),
-            "power_cap_w": num(fields[5]),
-        }
-    except Exception:
-        return None
-
-
-def _amdgpu_hwmon():
-    import glob
-
-    for hw in sorted(glob.glob(HWMON_GLOB)):
-        try:
-            if open(hw + "/name").read().strip() != "amdgpu":
-                continue
-        except OSError:
-            continue
-        return hw
-    return None
-
-
-def _sysfs_gpu():
-    import glob
-
-    util = None
-    for path in sorted(glob.glob(DRM_GLOB)):
-        v = _read_int(path)
-        if v is not None:
-            util = v
-            break
-
-    temp = None
-    power_w = None
-    power_cap_w = None
-    hw = _amdgpu_hwmon()
-    if hw:
-        t = _read_int(hw + "/temp1_input")
-        if t is not None:
-            temp = t / 1000.0
-        pw = _read_int(hw + "/power1_input")
-        if pw is not None:
-            power_w = pw / 1e6
-        cap = _read_int(hw + "/power1_cap")
-        if cap is not None:
-            power_cap_w = cap / 1e6
-    return {
-        "util": util,
-        "mem_used": None,
-        "mem_total": None,
-        "temp": temp,
-        "power_w": power_w,
-        "power_cap_w": power_cap_w,
-    }
-
-
-def gpu_sample():
-    g = _amd_smi()
-    if g is None:
-        g = _nvidia_smi()
-    if g is None:
-        g = _sysfs_gpu()
-    if g.get("power_cap_w") is None:
-        # amd-smi has no cap; try sysfs hwmon power1_cap
-        hw = _amdgpu_hwmon()
-        if hw:
-            cap = _read_int(hw + "/power1_cap")
-            if cap is not None:
-                g["power_cap_w"] = cap / 1e6
-    return g
+from nvstats_gpu import gpu_sample, nvidia_compute_procs
 
 
 _prev_cpu = None
@@ -536,8 +385,12 @@ def _username(pid):
         with open(f"/proc/{pid}/status") as f:
             for line in f:
                 if line.startswith("Uid:"):
-                    return pwd.getpwuid(int(line.split()[1])).pw_name
-    except (OSError, ValueError, KeyError):
+                    uid = int(line.split()[1])
+                    try:
+                        return pwd.getpwuid(uid).pw_name
+                    except KeyError:
+                        return str(uid)  # no passwd entry (e.g. container uid)
+    except (OSError, ValueError):
         pass
     return None
 
@@ -647,20 +500,40 @@ def _proc_cpu_pct(pid):
     return round(min(100.0 * os.cpu_count(), d_ticks / hz / dt * 100.0), 1)
 
 
-def gpu_proc_sample():
-    """Every process with an open DRM client fd on the GPU -- the generic,
-    nvtop-style process list (as opposed to llm_sample()'s LLM-only view).
-    See _fdinfo_engines() for the same-user visibility caveat."""
+NONCLIENT_RECHECK = 10  # ticks between fd scans of known non-GPU processes
+_nonclient_pids = set()
+_scan_tick = 0
+
+
+def gpu_proc_sample(gpu_uuid=None, backend=None):
+    """Every process using the GPU -- the generic, nvtop-style process list
+    (as opposed to llm_sample()'s LLM-only view).
+
+    Sources: open DRM client fds (AMD/Intel/nouveau; see _fdinfo_engines() for
+    the same-user visibility caveat) plus, on NVIDIA, `nvidia-smi
+    --query-compute-apps`, because the proprietary driver exposes no fdinfo.
+    """
+    global _scan_tick
     procs = []
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
         pids = []
+    _scan_tick += 1
     alive = set()
     for pid_s in pids:
+        pid = int(pid_s)
+        # Reading every fd of every process is the single most expensive thing
+        # this daemon does. A process that is not a GPU client rarely becomes
+        # one, so re-check those only every NONCLIENT_RECHECK ticks (staggered
+        # by pid); known clients are read every tick.
+        if pid in _nonclient_pids and (pid + _scan_tick) % NONCLIENT_RECHECK:
+            continue
         stats = _fdinfo_gpu_stats(pid_s)
         if stats is None:
+            _nonclient_pids.add(pid)
             continue
+        _nonclient_pids.discard(pid)
         argv = [a for a in (_proc_cmdline(pid_s) or []) if a]
         if not argv:
             continue
@@ -670,29 +543,48 @@ def gpu_proc_sample():
         # long descriptive blob for `ps` display, which makes a poor "name".
         st = _proc_status(pid_s, {"Name", "VmRSS"})
         name = st.get("Name") or os.path.basename(argv[0])
-        procs.append(
-            {
-                "pid": int(pid_s),
-                "user": _username(pid_s) or "?",
-                "unit": owning_unit(pid_s),
-                "name": name,
-                "cmdline": " ".join(argv),
-                "argv": argv,
-                "type": stats["types"],
-                "gpu_pct": stats["gpu_pct"],
-                "vram_kb": stats["vram_kb"],
-                "cpu_pct": _proc_cpu_pct(pid_s),
-                "rss_kb": int(st["VmRSS"].split()[0])
-                if "VmRSS" in st and st["VmRSS"].split()
-                else None,
+        procs.append(_proc_entry(pid_s, name, argv, st, stats))
+    if backend == "nvidia":
+        for app in nvidia_compute_procs(gpu_uuid):
+            pid_s = str(app["pid"])
+            if app["pid"] in alive:
+                continue
+            alive.add(app["pid"])
+            argv = [a for a in (_proc_cmdline(pid_s) or []) if a]
+            st = _proc_status(pid_s, {"Name", "VmRSS"})
+            name = st.get("Name") or os.path.basename(app["name"])
+            vram = app["vram_mib"]
+            stats = {
+                "types": ["compute"],
+                "gpu_pct": None,
+                "vram_kb": int(vram * 1024) if vram is not None else None,
             }
-        )
-    # Drop tracking state for pids that no longer exist so this dict
-    # doesn't grow without bound across a long-running poller session.
+            procs.append(_proc_entry(pid_s, name, argv or [app["name"]], st, stats))
+    # Drop tracking state for pids that no longer exist so these don't grow
+    # without bound across a long-running poller session.
     for tracked in list(_prev_gpu_engines.keys()):
         if tracked not in alive:
             del _prev_gpu_engines[tracked]
+    _nonclient_pids.intersection_update(int(p) for p in pids)
     return procs
+
+
+def _proc_entry(pid_s, name, argv, st, stats):
+    return {
+        "pid": int(pid_s),
+        "user": _username(pid_s) or "?",
+        "unit": owning_unit(pid_s),
+        "name": name,
+        "cmdline": " ".join(argv),
+        "argv": argv,
+        "type": stats["types"],
+        "gpu_pct": stats["gpu_pct"],
+        "vram_kb": stats["vram_kb"],
+        "cpu_pct": _proc_cpu_pct(pid_s),
+        "rss_kb": int(st["VmRSS"].split()[0])
+        if "VmRSS" in st and st["VmRSS"].split()
+        else None,
+    }
 
 
 def main():
@@ -700,11 +592,12 @@ def main():
         try:
             llm = llm_sample()
             llm["ollama_models"] = ollama_ps() or []
+            gpu = gpu_sample()
             sample = {
-                "gpu": gpu_sample(),
+                "gpu": gpu,
                 "sys": sys_sample(),
                 "llm": llm,
-                "gpu_procs": gpu_proc_sample(),
+                "gpu_procs": gpu_proc_sample(gpu.get("uuid"), gpu.get("backend")),
             }
         except Exception:
             sample = {

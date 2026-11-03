@@ -4,6 +4,8 @@ After=graphical-session-pre.target
 Wants=graphical-session-pre.target
 
 [Service]
+# Optional settings (NVSTATS_HTTP=1, NVSTATS_HTTP_BIND/PORT, NVSTATS_TOKEN, ...).
+EnvironmentFile=-%h/.config/nvstats/nvstats.env
 # Runs via a dedicated python3 interpreter copy carrying cap_sys_ptrace
 # (see README.md "Cross-user GPU stats" section) so gpu_proc_sample()/
 # llm_sample() can read /proc/<pid>/fdinfo for processes owned by a

@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """nvstats shared telemetry daemon and D-Bus API.
 
-Runs the poller in a background thread and exposes the latest sample
-on the session bus at com.daevid.nvstats / /com/daevid/nvstats.
+Runs the shared Sampler (backend/nvstats_core.py) and exposes the latest
+sample on the session bus at com.daevid.nvstats / /com/daevid/nvstats. With
+NVSTATS_HTTP=1 it also serves the read-only HTTP API from the same sampler
+(see nvstats_httpd.py).
 
 Interfaces:
   com.daevid.nvstats.Sample
-    Get() -> (a{sv})  # {gpu: a{sv}, sys: a{sv}, llm: a{sv}}
+    Get() -> s  # JSON: {gpu, sys, llm, gpu_procs, current_user, can_kill_all, + meta}
   com.daevid.nvstats.Status
     IsAlive() -> (b)
     Restart() -> (b)
   com.daevid.nvstats.Process
-    Kill(pid:int) -> (b, s)  # SIGTERM then SIGKILL if needed
+    Kill(pid:str) -> (b, s)  # SIGTERM then SIGKILL if needed
+    Restart(pid:str) -> (b, s)  # restart the systemd service owning pid
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -30,14 +34,8 @@ import dbus
 import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
-from nvstats_poll import (
-    gpu_proc_sample,
-    gpu_sample,
-    llm_sample,
-    ollama_ps,
-    owning_unit,
-    sys_sample,
-)
+import nvstats_core as core
+from nvstats_poll import owning_unit
 
 BUS_NAME = "com.daevid.nvstats"
 OBJECT_PATH = "/com/daevid/nvstats"
@@ -45,132 +43,21 @@ KILL_PATH_PREFIX = "/com/daevid/nvstats/kill"
 RESTART_PATH_PREFIX = "/com/daevid/nvstats/restart"
 
 
-class NvstatsService:
-    def __init__(self):
-        self._latest = {
-            "gpu": {},
-            "sys": {},
-            "llm": {
-                "llama": [],
-                "ollama": [],
-                "vllm": [],
-                "sglang": [],
-                "tgi": [],
-                "ollama_models": [],
-            },
-            "gpu_procs": [],
-        }
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = None
+sampler = core.Sampler(detect_kill=True)
 
-    def start(self):
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=3)
-            self._thread = None
-        self._stop.clear()
-
-    def _poll_loop(self):
-        # Current username, so the QML side can decide which processes are
-        # killable by this user (only same-user processes can be signaled).
-        try:
-            import pwd
-
-            current_user = pwd.getpwuid(os.getuid()).pw_name
-        except (KeyError, ImportError):
-            current_user = os.environ.get("USER", "")
-        # Detect passwordless sudo once at startup (cached): if sudo -n
-        # works without a password, we can kill any process; otherwise we
-        # can only kill same-user processes.
-        try:
-            r = subprocess.run(
-                ["sudo", "-n", "true"],
-                capture_output=True,
-                timeout=5,
-            )
-            can_kill_all = r.returncode == 0
-            import logging
-
-            logging.warning(
-                "nvstats: sudo -n true rc=%d can_kill_all=%s stderr=%s",
-                r.returncode,
-                can_kill_all,
-                r.stderr,
-            )
-        except Exception as e:
-            can_kill_all = False
-            import logging
-
-            logging.warning("nvstats: sudo check failed: %s", e)
-        while not self._stop.is_set():
-            try:
-                llm = llm_sample()
-                llm["ollama_models"] = ollama_ps() or []
-                sample = {
-                    "gpu": gpu_sample(),
-                    "sys": sys_sample(),
-                    "llm": llm,
-                    "gpu_procs": gpu_proc_sample(),
-                    "current_user": current_user,
-                    "can_kill_all": can_kill_all,
-                }
-                with self._lock:
-                    self._latest = sample
-            except Exception:
-                pass
-            self._stop.wait(1.0)
-
-    def get_sample(self):
-        with self._lock:
-            return {
-                k: dict(v) if isinstance(v, dict) else v
-                for k, v in self._latest.items()
-            }
-
-
-service = NvstatsService()
-
-
-def _to_dbus_value(v):
-    if v is None:
-        return dbus.String("null")
-    if isinstance(v, bool):
-        return dbus.Boolean(v)
-    if isinstance(v, int):
-        return dbus.Int64(v)
-    if isinstance(v, float):
-        return dbus.Double(v)
-    return dbus.String(str(v))
-
-
-def _dict_to_dbus(d):
-    return dbus.Dictionary({k: _to_dbus_value(v) for k, v in d.items()}, signature="sv")
-
-
-def _proc_list_to_dbus(procs):
-    out = []
-    for p in procs:
-        out.append(_dict_to_dbus(p))
-    return dbus.Array(out, signature="a{sv}")
-
-
-def _llm_to_dbus(llm):
-    return dbus.Dictionary(
-        {
-            "llama": _proc_list_to_dbus(llm.get("llama", [])),
-            "ollama": _proc_list_to_dbus(llm.get("ollama", [])),
-            "vllm": _proc_list_to_dbus(llm.get("vllm", [])),
-            "sglang": _proc_list_to_dbus(llm.get("sglang", [])),
-            "tgi": _proc_list_to_dbus(llm.get("tgi", [])),
-            "ollama_models": _proc_list_to_dbus(llm.get("ollama_models", [])),
-        },
-        signature="sv",
-    )
+EMPTY_SAMPLE = {
+    "gpu": {},
+    "sys": {},
+    "llm": {
+        "llama": [],
+        "ollama": [],
+        "vllm": [],
+        "sglang": [],
+        "tgi": [],
+        "ollama_models": [],
+    },
+    "gpu_procs": [],
+}
 
 
 class NvstatsDBusObject(dbus.service.Object):
@@ -316,10 +203,7 @@ class NvstatsDBusObject(dbus.service.Object):
         "com.daevid.nvstats.Sample", in_signature="", out_signature="s"
     )
     def Get(self):
-        import json
-
-        s = service.get_sample()
-        return dbus.String(json.dumps(s))
+        return dbus.String(json.dumps(sampler.latest() or EMPTY_SAMPLE))
 
     @dbus.service.method(
         "com.daevid.nvstats.Status", in_signature="", out_signature="b"
@@ -331,8 +215,8 @@ class NvstatsDBusObject(dbus.service.Object):
         "com.daevid.nvstats.Status", in_signature="", out_signature="b"
     )
     def Restart(self):
-        service.stop()
-        service.start()
+        sampler.stop()
+        sampler.start()
         return True
 
     @dbus.service.method(
@@ -393,7 +277,12 @@ class NvstatsRestartObject(dbus.service.FallbackObject):
 
 def main():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-    service.start()
+    sampler.start()
+    http_server = None
+    if os.environ.get("NVSTATS_HTTP", "").lower() in ("1", "true", "yes"):
+        import nvstats_httpd
+
+        http_server = nvstats_httpd.start_in_thread(sampler)
     loop = GLib.MainLoop()
     bus = dbus.SessionBus()
     bus_name = dbus.service.BusName(BUS_NAME, bus=bus)
@@ -403,14 +292,16 @@ def main():
     restart_obj = NvstatsRestartObject(bus, RESTART_PATH_PREFIX, obj)  # noqa: F841
 
     def on_signal(signum, frame):
-        service.stop()
+        sampler.stop()
         loop.quit()
 
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
 
     loop.run()
-    service.stop()
+    sampler.stop()
+    if http_server:
+        http_server.shutdown()
 
 
 if __name__ == "__main__":

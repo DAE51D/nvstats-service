@@ -11,8 +11,8 @@ Help the user install the shared telemetry daemon for the current desktop user. 
 
 1. Confirm this is a Linux host with a logged-in user session. If the user already has this repository, use that checkout; otherwise clone `https://github.com/DAE51D/nvstats-service.git`.
 2. Check that Python 3 and its D-Bus/GLib bindings are available. On Debian/Ubuntu/Kubuntu, the packages are `python3-dbus` and `python3-gi`. Ask before using `sudo` to install missing packages; do not pipe remote scripts into a shell.
-3. Run `./install.sh` from the repository as the desktop user, without `sudo`. It installs `nvstats.service` and the daemon under the invoking user's home and starts the user service.
-4. Verify `systemctl --user is-active nvstats.service` reports `active`. Then call `busctl --user call com.daevid.nvstats /com/daevid/nvstats com.daevid.nvstats.Sample Get`. Do not paste the full JSON sample into chat or logs: process arguments can contain private values. Report only a small, sanitized summary such as whether GPU/system data is present and how many model processes were detected.
+3. Run `./install.sh` from the repository as the desktop user, without `sudo`. It installs `nvstats.service` and the daemon under the invoking user's home and starts the user service. For a headless GPU host with no desktop session, use `sudo ./install.sh --system` instead (HTTP only; see the README for `--bind`, `--port`, `--token`). Only enable network exposure (`--bind` other than loopback) if the user asks for it, and suggest a `--token`. The installer also removes the legacy `vobot-gpu-daemon`; mention that before running it if you see one.
+4. Verify `systemctl --user is-active nvstats.service` reports `active`. Then call `busctl --user call com.daevid.nvstats /com/daevid/nvstats com.daevid.nvstats.Sample Get`. For HTTP installs also check `curl -s http://HOST:PORT/health`. Do not paste the full JSON sample into chat or logs: process arguments can contain private values. Report only a small, sanitized summary such as whether GPU/system data is present and how many model processes were detected.
 
 ## Process visibility
 

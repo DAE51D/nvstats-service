@@ -1,0 +1,24 @@
+[Unit]
+Description=nvstats GPU telemetry HTTP service (headless, no D-Bus)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# User=nobody is enough: nvidia-smi and the amdgpu sysfs files are world
+# readable, and /proc/<pid>/cmdline is public. Per-process GPU usage of other
+# users' processes (DRM fdinfo) is only visible to root or CAP_SYS_PTRACE.
+User=nobody
+EnvironmentFile=-/etc/nvstats/nvstats.env
+ExecStart=/usr/bin/python3 /opt/nvstats-service/service/nvstats_httpd.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Deliberately NOT ProtectProc=: the sampler must see every process.
+
+[Install]
+WantedBy=multi-user.target
