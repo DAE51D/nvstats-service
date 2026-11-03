@@ -61,7 +61,8 @@ class RedactTests(unittest.TestCase):
 class ViewTests(unittest.TestCase):
     def test_minimal_is_small_and_sorted(self):
         v = core.view_minimal(SAMPLE)
-        self.assertEqual(set(v), {*core.META_KEYS, "gpu", "gpu_procs"})
+        self.assertEqual(set(v), {*core.META_KEYS, "gpu", "sys", "gpu_procs"})
+        self.assertEqual(v["sys"], {"cpu": 1.0})
         self.assertEqual(len(v["gpu_procs"]), core.MINIMAL_PROCS)
         vram = [p["vram_kb"] for p in v["gpu_procs"]]
         self.assertEqual(vram, sorted(vram, reverse=True))

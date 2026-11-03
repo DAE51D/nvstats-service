@@ -17,7 +17,7 @@ For an AI-assisted setup, point your coding agent at the [install skill](SKILL.m
 | Endpoint | |
 | --- | --- |
 | `GET /health` | liveness, version, never needs the token |
-| `GET /api/v1/sample` | latest sample, **minimal** view: meta + `gpu` + top 5 `gpu_procs`; a few KB, sized for microcontrollers |
+| `GET /api/v1/sample` | latest sample, **minimal** view: meta + `gpu` + `sys.cpu` + top 5 `gpu_procs`; a few KB, sized for microcontrollers |
 | `GET /api/v1/sample?full=1` | the full sample (`sys`, `llm`, argv arrays, ...) |
 | `GET /api/v1/stream[?full=1]` | Server-Sent Events: one `sample` event per new sample (1 Hz), keep-alive comments in between |
 

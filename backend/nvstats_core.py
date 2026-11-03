@@ -24,7 +24,7 @@ import time
 from nvstats_gpu import gpu_sample
 from nvstats_poll import gpu_proc_sample, llm_sample, ollama_ps, sys_sample
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 SCHEMA = 1
 # Stamped by install.sh from `git rev-parse --short HEAD` (-dirty suffix when
 # the tree differs from HEAD), so clients can show what is actually running.
@@ -217,6 +217,7 @@ def view_minimal(sample, redact=True, max_procs=MINIMAL_PROCS):
     )[:max_procs]
     out = {k: sample[k] for k in META_KEYS}
     out["gpu"] = sample["gpu"]
+    out["sys"] = {"cpu": (sample.get("sys") or {}).get("cpu")}
     out["gpu_procs"] = [
         {
             "pid": p["pid"],
