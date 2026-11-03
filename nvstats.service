@@ -1,7 +1,8 @@
 [Unit]
 Description=nvstats shared GPU telemetry D-Bus service
-After=graphical-session-pre.target
-Wants=graphical-session-pre.target
+# No dependency on graphical-session*.target: with lingering enabled this unit
+# must also start at boot before anyone logs in (needed for the HTTP API).
+After=dbus.socket
 
 [Service]
 # Optional settings (NVSTATS_HTTP=1, NVSTATS_HTTP_BIND/PORT, NVSTATS_TOKEN, ...).

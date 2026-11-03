@@ -49,6 +49,8 @@ cd nvstats-service
 sudo ./install.sh --system [--bind 0.0.0.0] [--port 8039] [--token S3CRET]
 ```
 
+**Starts at boot:** both modes are enabled to start at boot. User mode also runs `loginctl enable-linger` (the installer tries it, then `sudo`), because a user service otherwise only starts once you log in, so an unattended host would not answer the HTTP API after a reboot. If that step fails, run `sudo loginctl enable-linger $USER` yourself.
+
 Settings live in an env file created once and never overwritten unless you pass the matching option (`~/.config/nvstats/nvstats.env`, or `/etc/nvstats/nvstats.env` for `--system`):
 
 | Variable | Default | |

@@ -7,6 +7,7 @@
 #   sudo ./install.sh --system        headless host: HTTP-only system service
 #                                     (no D-Bus, no desktop session needed)
 #
+# Both modes start at boot (user mode enables lingering so no login is needed).
 # Either mode removes the legacy vobot-gpu-daemon if it is installed
 # (--keep-legacy to leave it, e.g. while it still owns port 8039).
 # Settings live in an env file that is created once and never overwritten
@@ -127,6 +128,12 @@ if [[ "$mode" == system ]]; then
 	echo "nvstats-httpd installed (system). Check: systemctl status nvstats-httpd.service"
 	grep -q '^NVSTATS_TOKEN=' "$env_file" || echo "Note: listening on $bind without NVSTATS_TOKEN; add one with --token if this network is not trusted."
 else
+	# User services only run while the user is logged in. Lingering starts them at
+	# boot, which the HTTP API needs (e.g. a Vobot polling an unattended host).
+	if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]]; then
+		loginctl enable-linger "$USER" 2>/dev/null || sudo loginctl enable-linger "$USER" ||
+			echo "Warning: could not enable lingering; run 'sudo loginctl enable-linger $USER' so nvstats starts at boot without a login." >&2
+	fi
 	systemctl --user daemon-reload
 	systemctl --user enable nvstats.service
 	if systemctl --user is-active --quiet nvstats.service; then
