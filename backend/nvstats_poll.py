@@ -125,7 +125,16 @@ def _classify_llm(argv):
     if not argv:
         return None
     exe = os.path.basename(argv[0])
-    if exe in ("llama-server", "llama-cli", "llama-bench"):
+    if exe in (
+        "llama-server",
+        "llama-cli",
+        "llama-bench",
+        "llama-perplexity",
+        "llama-batched-bench",
+        "llama-embedding",
+        "llama-imatrix",
+        "llama-mtmd-cli",
+    ):
         return "llama"
     if exe == "ollama":
         return "ollama"
@@ -234,9 +243,13 @@ def llm_sample():
         entry["unit"] = owning_unit(pid)
         if engine == "llama":
             entry["model"] = _llm_model(engine, argv)
-            entry["ngl"] = _find("--n-gpu-layers", argv)
-            entry["ctx"] = _find("--ctx-size", argv)
-            entry["parallel"] = _find("--parallel", argv)
+            entry["ngl"] = (
+                _find("--n-gpu-layers", argv)
+                or _find("--gpu-layers", argv)
+                or _find("-ngl", argv)
+            )
+            entry["ctx"] = _find("--ctx-size", argv) or _find("-c", argv)
+            entry["parallel"] = _find("--parallel", argv) or _find("-np", argv)
             entry["alias"] = _find("--alias", argv)
             entry["port"] = _find("--port", argv)
             llama.append(entry)

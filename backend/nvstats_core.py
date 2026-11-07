@@ -24,7 +24,7 @@ import time
 from nvstats_gpu import gpu_sample
 from nvstats_poll import gpu_proc_sample, llm_sample, ollama_ps, sys_sample
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 SCHEMA = 1
 # Stamped by install.sh from `git rev-parse --short HEAD` (-dirty suffix when
 # the tree differs from HEAD), so clients can show what is actually running.
