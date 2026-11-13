@@ -4,6 +4,7 @@
 #   ./install.sh                      user mode: D-Bus service for knvtop/onvtop
 #   ./install.sh --http               ... plus the HTTP API (loopback only)
 #   ./install.sh --http --bind 0.0.0.0 [--port 8039] [--token SECRET]
+#   ./install.sh --poll 0.5           sample every 0.5 s instead of 1 s (0.25-10)
 #   sudo ./install.sh --system        headless host: HTTP-only system service
 #                                     (no D-Bus, no desktop session needed)
 #
@@ -21,6 +22,7 @@ http=0
 bind=""
 port=""
 token=""
+poll=""
 keep_legacy=0
 
 while [[ $# -gt 0 ]]; do
@@ -30,12 +32,17 @@ while [[ $# -gt 0 ]]; do
 	--bind) bind="${2:?--bind needs an address}"; http=1; shift ;;
 	--port) port="${2:?--port needs a number}"; http=1; shift ;;
 	--token) token="${2:?--token needs a value}"; http=1; shift ;;
+	--poll) poll="${2:?--poll needs seconds}"; shift ;;
 	--keep-legacy) keep_legacy=1 ;;
-	-h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+	-h | --help) sed -n '2,17p' "$0"; exit 0 ;;
 	*) echo "Unknown option: $1" >&2; exit 2 ;;
 	esac
 	shift
 done
+
+if [[ -n "$poll" && ! "$poll" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+	echo "--poll needs a number of seconds, e.g. 0.5" >&2; exit 2
+fi
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 python="$(command -v python3 || true)"
@@ -107,6 +114,7 @@ set_key() { # set_key KEY VALUE
 	printf '%s\n%s=%s\n' "$body" "$1" "$2" | sed '/^$/d' | write_env
 }
 [[ -e "$env_file" ]] || { printf '# nvstats settings (see README)\n' | write_env; }
+if [[ -n "$poll" ]]; then set_key NVSTATS_POLL_SECONDS "$poll"; fi
 if [[ $http -eq 1 || "$mode" == system ]]; then
 	[[ "$mode" == user ]] && set_key NVSTATS_HTTP 1
 	[[ -n "$bind" ]] && set_key NVSTATS_HTTP_BIND "$bind"

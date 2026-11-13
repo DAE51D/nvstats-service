@@ -19,7 +19,7 @@ For an AI-assisted setup, point your coding agent at the [install skill](SKILL.m
 | `GET /health` | liveness, version, never needs the token |
 | `GET /api/v1/sample` | latest sample, **minimal** view: meta + `gpu` + `sys.cpu` + top 5 `gpu_procs`; a few KB, sized for microcontrollers |
 | `GET /api/v1/sample?full=1` | the full sample (`sys`, `llm`, argv arrays, ...) |
-| `GET /api/v1/stream[?full=1]` | Server-Sent Events: one `sample` event per new sample (1 Hz), keep-alive comments in between |
+| `GET /api/v1/stream[?full=1]` | Server-Sent Events: one `sample` event per new sample (1 Hz by default, see `NVSTATS_POLL_SECONDS`), keep-alive comments in between |
 
 Process control is **not** available over HTTP.
 
@@ -41,6 +41,7 @@ cd nvstats-service
 ./install.sh                                   # D-Bus only
 ./install.sh --http                            # + HTTP on 127.0.0.1:8039
 ./install.sh --http --bind 0.0.0.0 --token S3CRET   # + reachable from the LAN
+./install.sh --http --poll 0.5                 # sample twice a second (for fast display clients)
 ```
 
 **Headless host (system service, HTTP only - no D-Bus, no desktop session needed)**:
@@ -59,6 +60,7 @@ Settings live in an env file created once and never overwritten unless you pass 
 | `NVSTATS_HTTP_BIND` | `127.0.0.1` (`0.0.0.0` with `--system`) | listen address |
 | `NVSTATS_HTTP_PORT` | `8039` | |
 | `NVSTATS_TOKEN` | unset | if set, `/api/v1/*` require `Authorization: Bearer <token>` |
+| `NVSTATS_POLL_SECONDS` | `1` | sample interval, 0.25-10 s (`./install.sh --poll 0.5`). `gpu` and `sys` follow it; the heavier per-process and LLM data is refreshed at most once a second and reused in between (see below) |
 | `NVSTATS_REDACT_ARGS` | `1` | mask values of secret-looking options (`--api-key`, `--token`, ...) in HTTP responses |
 | `NVSTATS_GPU_INDEX` | `0` | which GPU to report |
 | `NVSTATS_GPU_BACKEND` | auto | `nvidia` or `amd` |
@@ -72,6 +74,10 @@ curl http://localhost:8039/health
 ```
 
 GPU tools are optional: `amd-smi`/`nvidia-smi` are used when available (NVIDIA needs `nvidia-smi`; AMD works from sysfs alone but names the card from `amd-smi`).
+
+## Sample rate
+
+By default the daemon samples once a second. `NVSTATS_POLL_SECONDS` (or `./install.sh --poll SECONDS`) changes that, clamped to 0.25-10 s; set it in the env file and restart the service. At a faster rate only the cheap `gpu` and `sys` readings (sysfs and `/proc`) are re-read every sample. The expensive per-process GPU scan, LLM detection and `ollama ps` still run at most once a second, so `gpu_procs` and `llm` repeat their previous values in between. `seq` and `ts` still advance on every sample. Measured on a Strix Halo box a full sample is about 50 ms of CPU, so 0.5 s adds only a few percent of one core. Hardware sensors such as temperature and power typically refresh every few hundred ms, so going below 0.25 s would add nothing.
 
 ## Optional cross-user GPU process data
 

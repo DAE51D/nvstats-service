@@ -1,7 +1,7 @@
 """Transport-independent core of nvstats-service.
 
-The Sampler polls once a second in a background thread and publishes an
-immutable sample. The D-Bus and HTTP front-ends (service/) only read from it,
+The Sampler polls (once a second by default, NVSTATS_POLL_SECONDS to change)
+in a background thread and publishes an immutable sample. The D-Bus and HTTP front-ends (service/) only read from it,
 so neither needs the other's dependencies (HTTP needs no dbus/GLib).
 
 Sample schema (version 1). Meta: schema, host, seq, ts, version, git_commit.
@@ -24,13 +24,20 @@ import time
 from nvstats_gpu import gpu_sample
 from nvstats_poll import gpu_proc_sample, llm_sample, ollama_ps, sys_sample
 
-VERSION = "0.2.2"
+VERSION = "0.3.0"
 SCHEMA = 1
 # Stamped by install.sh from `git rev-parse --short HEAD` (-dirty suffix when
 # the tree differs from HEAD), so clients can show what is actually running.
 GIT_COMMIT = "unknown"
 
-POLL_SECONDS = 1.0
+POLL_SECONDS = 1.0  # default sample interval (NVSTATS_POLL_SECONDS overrides)
+POLL_MIN_SECONDS = 0.25
+POLL_MAX_SECONDS = 10.0
+# The heavy parts (per-process GPU scan, LLM detection, `ollama ps`) are never
+# refreshed faster than this, however short the sample interval is; between
+# refreshes a sample reuses the previous gpu_procs / llm. Only gpu and sys
+# (cheap sysfs / /proc reads) run at the full sample rate.
+SLOW_SECONDS = 1.0
 MINIMAL_PROCS = 5
 # Some processes (browsers, ffmpeg filter graphs) have multi-KB command lines;
 # the minimal view targets a microcontroller with little RAM.
@@ -75,9 +82,28 @@ def _attach_gpu_to_llm(llm, procs):
                 e["type"] = p.get("type", [])
 
 
+def poll_seconds_from_env(env=None):
+    """Sample interval from NVSTATS_POLL_SECONDS, clamped to 0.25-10 s.
+    Unset, empty or unparsable values fall back to the 1 s default."""
+    raw = (os.environ if env is None else env).get("NVSTATS_POLL_SECONDS", "").strip()
+    if not raw:
+        return POLL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("ignoring NVSTATS_POLL_SECONDS=%r (not a number)", raw)
+        return POLL_SECONDS
+    if not value == value:  # NaN
+        return POLL_SECONDS
+    return max(POLL_MIN_SECONDS, min(POLL_MAX_SECONDS, value))
+
+
 class Sampler:
-    def __init__(self, detect_kill=False):
+    def __init__(self, detect_kill=False, poll_seconds=None):
         self._detect_kill = detect_kill
+        self._poll = poll_seconds_from_env() if poll_seconds is None else poll_seconds
+        self._slow = None  # (llm, procs) from the last heavy refresh
+        self._slow_at = 0.0
         self._cond = threading.Condition()
         self._latest = None
         self._seq = 0
@@ -99,11 +125,19 @@ class Sampler:
         self._stop.clear()
 
     def _sample_once(self, extra):
-        llm = llm_sample()
-        llm["ollama_models"] = ollama_ps() or []
+        now = time.monotonic()
         gpu = gpu_sample()
-        procs = gpu_proc_sample(gpu.get("uuid"), gpu.get("backend"))
-        _attach_gpu_to_llm(llm, procs)
+        # Refresh the heavy data once per SLOW_SECONDS (or every sample when
+        # polling slower than that). Half a tick of slack keeps timing jitter
+        # from skipping a refresh.
+        interval = max(SLOW_SECONDS, self._poll)
+        if self._slow is None or now - self._slow_at >= interval - self._poll / 2:
+            llm = llm_sample()
+            llm["ollama_models"] = ollama_ps() or []
+            procs = gpu_proc_sample(gpu.get("uuid"), gpu.get("backend"))
+            _attach_gpu_to_llm(llm, procs)
+            self._slow, self._slow_at = (llm, procs), now
+        llm, procs = self._slow
         return {
             "gpu": gpu,
             "sys": sys_sample(),
@@ -139,7 +173,7 @@ class Sampler:
                     )
                     self._latest = sample
                     self._cond.notify_all()
-            self._stop.wait(max(0.0, POLL_SECONDS - (time.monotonic() - started)))
+            self._stop.wait(max(0.0, self._poll - (time.monotonic() - started)))
 
     def latest(self):
         """The newest published sample (never mutated afterwards), or None
