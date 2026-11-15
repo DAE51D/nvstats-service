@@ -22,9 +22,10 @@ import threading
 import time
 
 from nvstats_gpu import gpu_sample
+from nvstats_npu import NpuSampler
 from nvstats_poll import gpu_proc_sample, llm_sample, ollama_ps, sys_sample
 
-VERSION = "0.3.0"
+VERSION = "1.1.0"
 SCHEMA = 1
 # Stamped by install.sh from `git rev-parse --short HEAD` (-dirty suffix when
 # the tree differs from HEAD), so clients can show what is actually running.
@@ -82,6 +83,24 @@ def _attach_gpu_to_llm(llm, procs):
                 e["type"] = p.get("type", [])
 
 
+def _attach_npu_to_llm(llm, npu_procs):
+    """Fresh NPU numbers for NPU-backed LLM cards (FastFlowLM). The cached
+    `llm` is shared between samples and must not be mutated, so cards that
+    change are copied."""
+    by_pid = {p["pid"]: p for p in npu_procs}
+    out = dict(llm)
+    for key in ("flm",):
+        cards = []
+        for e in llm.get(key, []):
+            p = by_pid.get(e.get("pid"))
+            if p:
+                e = dict(e, gpu_pct=p["gpu_pct"], vram_kb=p["vram_kb"], type=["npu"])
+            cards.append(e)
+        if key in llm:
+            out[key] = cards
+    return out
+
+
 def poll_seconds_from_env(env=None):
     """Sample interval from NVSTATS_POLL_SECONDS, clamped to 0.25-10 s.
     Unset, empty or unparsable values fall back to the 1 s default."""
@@ -110,6 +129,7 @@ class Sampler:
         self._stop = threading.Event()
         self._thread = None
         self._host = socket.gethostname()
+        self._npu = NpuSampler()
 
     def start(self):
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
@@ -138,8 +158,20 @@ class Sampler:
             _attach_gpu_to_llm(llm, procs)
             self._slow, self._slow_at = (llm, procs), now
         llm, procs = self._slow
+        # NPU: None on hosts without one (clients then draw nothing). NPU
+        # processes join gpu_procs, marked type ["npu"], so a client lists
+        # them with the GPU ones and only shows the marker when one exists.
+        try:
+            npu, npu_procs = self._npu.sample()
+        except Exception:
+            log.exception("npu sampling failed")
+            npu, npu_procs = None, []
+        if npu_procs:
+            procs = list(procs) + npu_procs
+            llm = _attach_npu_to_llm(llm, npu_procs)
         return {
             "gpu": gpu,
+            "npu": npu,
             "sys": sys_sample(),
             "llm": llm,
             "gpu_procs": procs,
@@ -246,24 +278,36 @@ def view_full(sample, redact=False):
 
 
 def view_minimal(sample, redact=True, max_procs=MINIMAL_PROCS):
-    procs = sorted(
+    # NPU processes often report no memory, so rank them in their own list or
+    # they would never make the cut; two slots are reserved for them.
+    ranked = sorted(
         sample["gpu_procs"], key=lambda p: p.get("vram_kb") or 0, reverse=True
-    )[:max_procs]
+    )
+    npu_ranked = [p for p in ranked if "npu" in (p.get("type") or [])]
+    gpu_ranked = [p for p in ranked if p not in npu_ranked]
+    keep_npu = npu_ranked[: min(2, max_procs)]
+    procs = gpu_ranked[: max_procs - len(keep_npu)] + keep_npu
     out = {k: sample[k] for k in META_KEYS}
     out["gpu"] = sample["gpu"]
+    if sample.get("npu") is not None:
+        out["npu"] = sample["npu"]
     out["sys"] = {"cpu": (sample.get("sys") or {}).get("cpu")}
-    out["gpu_procs"] = [
-        {
-            "pid": p["pid"],
-            "name": p["name"],
-            "user": p["user"],
-            "vram_kb": p["vram_kb"],
-            "gpu_pct": p["gpu_pct"],
-            "cpu_pct": p["cpu_pct"],
-            "cmdline": " ".join(redact_argv(p["argv"]) if redact else p["argv"])[
-                :MINIMAL_CMDLINE_MAX
-            ],
-        }
-        for p in procs
-    ]
+    out["gpu_procs"] = [_minimal_proc(p, redact) for p in procs]
     return out
+
+
+def _minimal_proc(p, redact):
+    e = {
+        "pid": p["pid"],
+        "name": p["name"],
+        "user": p["user"],
+        "vram_kb": p["vram_kb"],
+        "gpu_pct": p["gpu_pct"],
+        "cpu_pct": p["cpu_pct"],
+        "cmdline": " ".join(redact_argv(p["argv"]) if redact else p["argv"])[
+            :MINIMAL_CMDLINE_MAX
+        ],
+    }
+    if "npu" in (p.get("type") or []):
+        e["type"] = ["npu"]  # only hosts with an NPU ever carry this key
+    return e

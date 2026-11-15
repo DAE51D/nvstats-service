@@ -90,7 +90,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/service" "$stage/backend"
 cp "$repo_dir"/service/nvstats_service.py "$repo_dir"/service/nvstats_httpd.py "$stage/service/"
-cp "$repo_dir"/backend/nvstats_core.py "$repo_dir"/backend/nvstats_gpu.py "$repo_dir"/backend/nvstats_poll.py "$stage/backend/"
+cp "$repo_dir"/backend/nvstats_core.py "$repo_dir"/backend/nvstats_gpu.py "$repo_dir"/backend/nvstats_npu.py "$repo_dir"/backend/nvstats_poll.py "$stage/backend/"
 sed -i "s/^GIT_COMMIT = .*/GIT_COMMIT = \"$commit\"/" "$stage/backend/nvstats_core.py"
 
 if [[ "$mode" == system ]]; then
@@ -127,6 +127,27 @@ if [[ "$mode" == system ]]; then
 else
 	chmod 0600 "$env_file"
 fi
+
+# --- NPU discovery (informational; the service re-detects at every start) -----
+# Clients draw an NPU line and box only when one is found, so a host without an
+# NPU needs nothing here. An NPU that is found but unreadable shows as N/A.
+npu_found=0
+for accel in /sys/class/accel/accel*; do
+	[[ -e "$accel/device" ]] || continue
+	npu_found=1
+	drv="$(basename "$(readlink -f "$accel/device/driver" 2>/dev/null)" 2>/dev/null || true)"
+	name="$(cat "$accel/device/vbnv" 2>/dev/null || basename "$accel")"
+	node="/dev/accel/$(basename "$accel")"
+	if [[ "$drv" != amdxdna ]]; then
+		echo "NPU found: $name (driver ${drv:-none}); not supported yet, clients will show N/A."
+	elif [[ "$mode" == user && ! (-r "$node" && -w "$node") ]]; then
+		echo "NPU found: $name, but $node is not readable by $USER; clients will show N/A."
+		echo "  Fix: sudo usermod -aG render $USER   (then log out and back in)"
+	else
+		echo "NPU found: $name ($drv); utilisation and NPU processes will be reported."
+	fi
+done
+[[ $npu_found -eq 1 ]] || echo "No NPU found; NPU display stays hidden."
 
 # --- (re)start ---------------------------------------------------------------
 if [[ "$mode" == system ]]; then

@@ -138,6 +138,10 @@ def _classify_llm(argv):
         return "llama"
     if exe == "ollama":
         return "ollama"
+    # FastFlowLM, the NPU (XDNA) LLM runtime; lemonade runs it as flm-real.
+    # Only a serving/chatting instance, not `flm list`/`validate`/`pull`.
+    if exe in ("flm", "flm-real") and any(a in ("serve", "run") for a in argv[1:3]):
+        return "flm"
 
     # Console scripts may appear as argv[0], or as argv[1] when Python is the
     # interpreter. Do not scan arbitrary arguments: an unrelated client may
@@ -179,6 +183,10 @@ def _llm_model(engine, argv):
         return _find("--model", argv) or _find("-m", argv)
     if engine == "ollama":
         return None
+    if engine == "flm":
+        return _first_positional_after(argv, "serve") or _first_positional_after(
+            argv, "run"
+        )
     if engine == "vllm":
         return (
             _find("--model", argv)
@@ -202,7 +210,7 @@ def _is_ollama_owned(argv):
 
 
 def llm_sample():
-    llama, ollama, vllm, sglang, tgi = [], [], [], [], []
+    llama, ollama, vllm, sglang, tgi, flm = [], [], [], [], [], []
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
@@ -269,12 +277,19 @@ def llm_sample():
             entry["model"] = _llm_model(engine, argv)
             entry["port"] = _find("--port", argv)
             tgi.append(entry)
+        elif engine == "flm":
+            entry["model"] = _llm_model(engine, argv)
+            entry["port"] = _find("--port", argv) or _find("-p", argv)
+            entry["ctx"] = _find("--ctx-len", argv) or _find("-c", argv)
+            entry["type"] = ["npu"]
+            flm.append(entry)
     return {
         "llama": llama,
         "ollama": ollama,
         "vllm": vllm,
         "sglang": sglang,
         "tgi": tgi,
+        "flm": flm,
     }
 
 

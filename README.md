@@ -23,7 +23,13 @@ For an AI-assisted setup, point your coding agent at the [install skill](SKILL.m
 
 Process control is **not** available over HTTP.
 
-Sample schema (v1): meta `schema, host, seq, ts, version, git_commit`; `gpu` (one GPU, chosen with `NVSTATS_GPU_INDEX`, default 0) with `index, name, uuid, driver, backend, util, mem_util, mem_used, mem_total` (MiB), `temp, power_w, power_cap_w, fan_pct, clock_gfx, clock_gfx_max, clock_mem, clock_mem_max, pcie_gen, pcie_gen_max, pcie_width, pcie_width_max, pstate, throttle` (anything the hardware does not report is `null`); `gpu_procs[]` (`pid, name, user, vram_kb, gpu_pct, cpu_pct, cmdline`; `argv` etc. in the full view); `sys`, `llm` (llama.cpp, Ollama, vLLM, SGLang, TGI) in the full view. `seq` increases with every sample, so a client can detect a stale server.
+Sample schema (v1): meta `schema, host, seq, ts, version, git_commit`; `gpu` (one GPU, chosen with `NVSTATS_GPU_INDEX`, default 0) with `index, name, uuid, driver, backend, util, mem_util, mem_used, mem_total` (MiB), `temp, power_w, power_cap_w, fan_pct, clock_gfx, clock_gfx_max, clock_mem, clock_mem_max, pcie_gen, pcie_gen_max, pcie_width, pcie_width_max, pstate, throttle` (anything the hardware does not report is `null`); `gpu_procs[]` (`pid, name, user, vram_kb, gpu_pct, cpu_pct, cmdline`; `argv` etc. in the full view); `sys`, `llm` (llama.cpp, Ollama, vLLM, SGLang, TGI, and FastFlowLM on the NPU) in the full view. `seq` increases with every sample, so a client can detect a stale server.
+
+**NPU (optional).** Hosts with an NPU also carry `npu`: `present, name, driver, fw, pci, readable, reason, util, util_source, tasks, tasks_max, clock_mhz, clock_max_mhz, tops, tops_max, power_w, mem_used, cmds_per_s`. On hosts without one it is `null` in the full view and absent in the minimal view, so clients draw nothing. If an NPU exists but cannot be read (no `render` group, unsupported driver), `present` is true, `readable` is false and `reason` says why; clients show N/A. Processes using the NPU appear in `gpu_procs` with `type: ["npu"]` (the marker only ever exists on NPU hosts), and NPU-backed LLM servers (FastFlowLM) appear under `llm.flm`. AMD XDNA (`amdxdna`) is supported; other drivers are detected and reported as unreadable.
+
+`npu.util` is an activity estimate, not hardware busy time: the `amdxdna` driver exposes no utilisation counter, so it is the share of the last 2 s in which the NPU had commands in flight or completing (0 idle, ~100 while a model generates). `util_source` is `"activity"`. NPU memory is not independent: the NPU uses the same unified system RAM as the CPU and iGPU, so `sys.ram_used` already includes it; `mem_used` is only the NPU's own heap, when the driver reports it. Reading the NPU needs access to `/dev/accel/accelN` (the `render` group); the installer reports what it finds.
+
+![onvtop showing the NPU alongside the GPU: NPU card and pink graph line, FastFlowLM and llama.cpp process cards](docs/NPU.png)
 
 GPU data comes from `nvidia-smi` (NVIDIA) or sysfs plus a one-time `amd-smi static` (AMD); per-process GPU use comes from DRM fdinfo, plus `nvidia-smi --query-compute-apps` on NVIDIA, whose driver exposes no fdinfo. Set `NVSTATS_GPU_BACKEND=nvidia|amd` to force one on a host that has both.
 
@@ -93,6 +99,22 @@ dbus-run-session -- python3 scripts/smoke_dbus.py
 ```
 
 The D-Bus service has full access as the installing user and includes process-control methods; install it only if you trust this code. The HTTP API is read-only and off by default in user mode; it binds to loopback unless you choose otherwise. Before exposing it to a network, set `NVSTATS_TOKEN`: samples include process names and command lines (secret-looking option values are masked, but that is a best-effort filter, not a guarantee).
+
+## Shared look (for client authors)
+
+All the nvtop clients use the same order and colors so they read as one family. Order: GPU, GTT (memory), Temp, Power, CPU, NPU (only on hosts that report one), then system RAM, which is a gauge but not a graph line.
+
+| Series | Color |
+| --- | --- |
+| GPU | `#4d9fff` |
+| GTT / memory | `#e8c33a` |
+| Temp | `#b07fe8` |
+| Power | `#3ddc84` |
+| CPU | `#ff8c42` |
+| NPU | `#ec60a0` |
+| System RAM | `#89929c` |
+
+LLM engine cards: llama.cpp `#4d9fff`, Ollama `#e8c33a`, vLLM `#b07fe8`, SGLang `#3ddc84`, TGI `#ff8c42`, FastFlowLM (NPU) `#ec60a0`. NPU elements are drawn only when `npu` is present in the sample, and show N/A when it is present but unreadable.
 
 ## Other nvtop
 

@@ -16,6 +16,8 @@ Help the user install the shared telemetry daemon for the current desktop user. 
 
 ## Process visibility
 
+If the host has an NPU, the installer reports whether it can be read. AMD XDNA (`amdxdna`) is supported; if it is found but not readable, the user usually needs to be in the `render` group (`sudo usermod -aG render $USER`, then log out and back in). Clients show N/A until then. Hosts without an NPU need nothing.
+
 The daemon can read processes owned by the same user without extra privileges. Basic process names and arguments may also be visible across users depending on the host's `/proc` policy. Per-process GPU engine/memory details for another user's process require a dedicated interpreter with `CAP_SYS_PTRACE`; this is optional and is a broad process-inspection privilege.
 
 Do not grant that capability by default. Explain the tradeoff and ask for explicit approval first. If approved, follow the generic cross-user procedure in the knvtop README and apply the capability only to the dedicated `python3-ptrace` copy—not the system Python executable. Never change sudoers or run the telemetry daemon as root to avoid this optional step.
